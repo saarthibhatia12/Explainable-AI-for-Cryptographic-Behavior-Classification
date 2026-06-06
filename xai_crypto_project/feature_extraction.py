@@ -1,58 +1,137 @@
-import math
 import numpy as np
-from collections import Counter
 
-def shannon_entropy(data: bytes) -> float:
-    counts = Counter(data)
-    total  = len(data)
-    return -sum((c / total) * math.log2(c / total) for c in counts.values())
+# ── helpers ──────────────────────────────────────────────────────────────────
 
-def chi_square(data: bytes) -> float:
-    counts   = np.array([Counter(data).get(i, 0) for i in range(256)])
-    expected = len(data) / 256.0
-    return float(np.sum((counts - expected) ** 2 / expected))
-
-def byte_frequency_stats(data: bytes):
-    freqs = np.array([Counter(data).get(i, 0) for i in range(256)]) / len(data)
-    return freqs.mean(), freqs.std(), freqs.max(), freqs.min()
-
-def run_length_stats(data: bytes):
-    if len(data) == 0:
+def _run_length_stats(arr: np.ndarray):
+    """Mean / std / max of run-length encoded consecutive equal bytes."""
+    if len(arr) == 0:
         return 0.0, 0.0, 0
     runs, run = [], 1
-    for i in range(1, len(data)):
-        if data[i] == data[i - 1]:
+    for i in range(1, len(arr)):
+        if arr[i] == arr[i - 1]:
             run += 1
         else:
             runs.append(run)
             run = 1
     runs.append(run)
-    runs = np.array(runs)
-    return float(runs.mean()), float(runs.std()), int(runs.max())
+    r = np.array(runs)
+    return float(r.mean()), float(r.std()), int(r.max())
 
-def serial_correlation(data: bytes) -> float:
-    if len(data) < 2:
+
+def _autocorr_at_lag(arr: np.ndarray, lag: int) -> float:
+    """Pearson correlation between arr and arr shifted by `lag` bytes."""
+    if len(arr) <= lag:
         return 0.0
-    arr = np.frombuffer(data, dtype=np.uint8).astype(float)
-    return float(np.corrcoef(arr[:-1], arr[1:])[0, 1])
+    a, b = arr[:-lag].astype(float), arr[lag:].astype(float)
+    if a.std() == 0 or b.std() == 0:
+        return 0.0
+    return float(np.corrcoef(a, b)[0, 1])
 
-def extract_features(byte_list) -> dict:
-    data = bytes([int(b) for b in byte_list])
 
-    mean_f, std_f, max_f, min_f = byte_frequency_stats(data)
-    rl_mean, rl_std, rl_max     = run_length_stats(data)
+def _bigram_entropy(arr: np.ndarray) -> float:
+    """Shannon entropy of 2-byte (bigram) pair frequencies."""
+    if len(arr) < 2:
+        return 0.0
+    # encode each bigram as a single int: hi*256 + lo
+    bigrams = arr[:-1].astype(np.int32) * 256 + arr[1:].astype(np.int32)
+    counts  = np.bincount(bigrams, minlength=65536)
+    total   = counts.sum()
+    p = counts[counts > 0] / total
+    return float(-np.sum(p * np.log2(p)))
+
+
+def _block_variance(arr: np.ndarray, block_size: int) -> float:
+    """
+    Chop the array into non-overlapping blocks of `block_size` bytes,
+    compute the mean byte value of each block, then return the variance
+    of those means. Low variance → ciphertext (uniform per-block means);
+    high variance → plaintext (uneven content per block).
+    """
+    n_blocks = len(arr) // block_size
+    if n_blocks < 2:
+        return 0.0
+    blocks = arr[: n_blocks * block_size].reshape(n_blocks, block_size)
+    means  = blocks.mean(axis=1)
+    return float(means.var())
+
+
+def _byte_diff_stats(arr: np.ndarray):
+    """Stats on the absolute byte-to-byte differences."""
+    if len(arr) < 2:
+        return 0.0, 0.0
+    diffs = np.abs(np.diff(arr.astype(np.int16)))
+    # entropy of diff distribution (diffs range 0-255)
+    counts = np.bincount(diffs, minlength=256)
+    total  = counts.sum()
+    p = counts[counts > 0] / total
+    diff_entropy = float(-np.sum(p * np.log2(p)))
+    return diff_entropy, float(diffs.std())
+
+
+# ── main feature function ─────────────────────────────────────────────────────
+
+def extract_features(byte_list, seq_len: int = None) -> dict:
+    data  = bytes([int(b) for b in byte_list])
+    arr   = np.frombuffer(data, dtype=np.uint8)
+    total = len(arr)
+
+    # seq_len = original ciphertext length before any truncation.
+    # This is a first-class feature: AES outputs 288B, DES 272B, RSA 256B, plaintext 256B.
+    # Including it explicitly is correct because packet/block length IS observable in
+    # network traffic and it directly encodes IV-size and block-size structure.
+    _seq_len = seq_len if seq_len is not None else total
+
+    # --- byte frequency histogram (built once) ---
+    counts = np.bincount(arr, minlength=256)
+    freqs  = counts / total
+
+    # --- global statistics ---
+    entropy  = float(-np.sum(freqs[freqs > 0] * np.log2(freqs[freqs > 0])))
+    # Normalise chi-square by N so it measures non-uniformity *per byte*,
+    # removing the scaling artefact (chi_square ∝ N) from variable-length sequences.
+    chi_sq_norm = float(np.sum((counts - total / 256.0) ** 2 / (total / 256.0))) / total
+
+    # --- run-length ---
+    rl_mean, rl_std, rl_max = _run_length_stats(arr)
+
+    # --- serial correlation (lag 1) ---
+    a, b = arr[:-1].astype(float), arr[1:].astype(float)
+    serial = float(np.corrcoef(a, b)[0, 1]) if (a.std() > 0 and b.std() > 0) else 0.0
+
+    # --- block-structure features (secondary AES vs DES signal) ---
+    autocorr_lag8  = _autocorr_at_lag(arr, 8)
+    autocorr_lag16 = _autocorr_at_lag(arr, 16)
+    block_var_8    = _block_variance(arr, 8)
+    block_var_16   = _block_variance(arr, 16)
+
+    # --- higher-order features ---
+    bigram_ent             = _bigram_entropy(arr)
+    diff_entropy, diff_std = _byte_diff_stats(arr)
 
     return {
-        "entropy":          shannon_entropy(data),
-        "chi_square":       chi_square(data),
-        "byte_freq_mean":   mean_f,
-        "byte_freq_std":    std_f,
-        "byte_freq_max":    max_f,
-        "byte_freq_min":    min_f,
-        "run_mean":         rl_mean,
-        "run_std":          rl_std,
-        "run_max":          rl_max,
-        "unique_byte_ratio": len(set(data)) / 256.0,
-        "zero_byte_ratio":  data.count(0) / len(data),
-        "serial_corr":      serial_correlation(data),
+        # ── primary discriminator (AES=288, DES=272, RSA=256, plaintext=256) ──
+        "seq_len":           _seq_len,
+        # global byte distribution
+        "entropy":           entropy,
+        "chi_square_norm":   chi_sq_norm,   # per-byte chi-square, length-invariant
+        "byte_freq_std":     float(freqs.std()),
+        "byte_freq_max":     float(freqs.max()),
+        "byte_freq_min":     float(freqs.min()),
+        "unique_byte_ratio": float(np.count_nonzero(counts)) / 256.0,
+        "zero_byte_ratio":   float(counts[0]) / total,
+        # run-length
+        "run_mean":          rl_mean,
+        "run_std":           rl_std,
+        "run_max":           rl_max,
+        # serial / lag-1
+        "serial_corr":       serial,
+        # block-structure
+        "autocorr_lag8":     autocorr_lag8,
+        "autocorr_lag16":    autocorr_lag16,
+        "block_var_8":       block_var_8,
+        "block_var_16":      block_var_16,
+        # higher-order
+        "bigram_entropy":    bigram_ent,
+        "diff_entropy":      diff_entropy,
+        "diff_std":          diff_std,
     }

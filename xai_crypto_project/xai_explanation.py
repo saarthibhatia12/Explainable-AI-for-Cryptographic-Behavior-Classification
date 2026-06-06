@@ -1,9 +1,11 @@
+import os
 import shap
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 def run_shap_analysis(model, X_train, X_test, y_test):
+    os.makedirs("report", exist_ok=True)
     print("Computing SHAP values...")
     explainer   = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(X_test)
@@ -46,7 +48,7 @@ def run_shap_analysis(model, X_train, X_test, y_test):
             feature_names = X_test.columns.tolist()
         )
         shap.waterfall_plot(explanation, show=False)
-        plt.title(f"Local explanation - predicted class: {class_name}")
+        plt.gcf().axes[0].set_title(f"Local explanation - predicted class: {class_name}")
         plt.tight_layout()
         plt.savefig(f"report/shap_waterfall_{class_name}.png", dpi=150, bbox_inches="tight")
         plt.close()
@@ -68,7 +70,7 @@ def run_shap_analysis(model, X_train, X_test, y_test):
     ax.set_xlabel(top_feature)
     ax.set_ylabel(f"SHAP value ({model.classes_[class_idx]})")
     ax.set_title(f"SHAP Dependence - {top_feature} (class: {model.classes_[class_idx]})")
-    plt.colorbar(sc, label="Feature importance")
+    plt.colorbar(sc, label="Feature value")
     plt.tight_layout()
     plt.savefig("report/shap_dependence.png", dpi=150, bbox_inches="tight")
     plt.close()

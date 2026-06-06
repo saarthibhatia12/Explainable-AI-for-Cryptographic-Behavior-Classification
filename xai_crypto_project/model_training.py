@@ -1,3 +1,4 @@
+import os
 import joblib
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -14,13 +15,23 @@ def train_and_evaluate(feature_df: pd.DataFrame):
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+    os.makedirs("report", exist_ok=True)
+    os.makedirs("models", exist_ok=True)
+    model = RandomForestClassifier(
+        n_estimators=300,
+        min_samples_leaf=2,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1
+    )
     model.fit(X_train, y_train)
 
-    cv_scores = cross_val_score(model, X, y, cv=5, scoring="accuracy")
+    cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring="accuracy")
     print(f"Cross-validation accuracy: {cv_scores.mean():.4f} +/- {cv_scores.std():.4f}")
 
     y_pred = model.predict(X_test)
+    test_acc = (y_pred == y_test).mean()
+    print(f"Test accuracy: {test_acc:.4f}")
     print("\nClassification Report:")
     print(classification_report(y_test, y_pred))
 

@@ -5,14 +5,14 @@ from Crypto.Cipher import AES, DES, PKCS1_OAEP
 from Crypto.PublicKey import RSA
 from Crypto.Util.Padding import pad
 
-SAMPLES_PER_CLASS = 500
+SAMPLES_PER_CLASS = 2000
 PLAINTEXT_SIZE    = 256
 
 def generate_realistic_plaintext(size: int) -> bytes:
     pattern = random.choice(['text', 'json', 'binary', 'mixed', 'random_heavy'])
     if pattern == 'text':
         words = [b'hello', b'world', b'test', b'data', b'info', b'message',
-                 b'request', b'response', b'server', b'client', b'user', b'data']
+                 b'request', b'response', b'server', b'client', b'user']
         result = b''
         while len(result) < size:
             result += random.choice(words) + b' '
@@ -43,13 +43,15 @@ def encrypt_des(plaintext: bytes) -> bytes:
     cipher = DES.new(key, DES.MODE_CBC)
     return cipher.iv + cipher.encrypt(pad(plaintext, DES.block_size))
 
-_rsa_key = RSA.generate(2048)
+_RSA_KEYS = [RSA.generate(2048) for _ in range(10)]
 
 def encrypt_rsa(plaintext: bytes) -> bytes:
-    cipher = PKCS1_OAEP.new(_rsa_key)
+    key = random.choice(_RSA_KEYS)
+    cipher = PKCS1_OAEP.new(key)
     return cipher.encrypt(plaintext[:190])
 
 def generate_dataset(output_path: str = "data/dataset.csv"):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     records = []
     for i in range(SAMPLES_PER_CLASS):
         plaintext = generate_realistic_plaintext(PLAINTEXT_SIZE)
@@ -60,7 +62,7 @@ def generate_dataset(output_path: str = "data/dataset.csv"):
             ("RSA",       encrypt_rsa(plaintext)),
             ("plaintext", plaintext),
         ]:
-            records.append({"bytes": list(ciphertext), "label": label})
+            records.append({"bytes": list(ciphertext), "seq_len": len(ciphertext), "label": label})
 
         if i % 100 == 0:
             print(f"  Generated {i}/{SAMPLES_PER_CLASS} samples per class...")
