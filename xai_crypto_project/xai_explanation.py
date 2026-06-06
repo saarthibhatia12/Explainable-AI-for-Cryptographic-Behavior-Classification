@@ -11,30 +11,28 @@ def run_shap_analysis(model, X_train, X_test, y_test):
     # shap_values shape: (n_samples, n_features, n_classes)
     n_samples, n_features, n_classes = shap_values.shape
 
-    # Plot 1: Global summary beeswarm
-    shap.summary_plot(
-        shap_values, X_test,
-        class_names=model.classes_,
-        show=False
-    )
-    plt.title("SHAP Summary - Feature Impact per Class")
-    plt.tight_layout()
-    plt.savefig("report/shap_summary.png", dpi=150, bbox_inches="tight")
-    plt.close()
-    print("Saved -> report/shap_summary.png")
+    # Plot 1 & 2: Global summary beeswarm + bar per class
+    for class_idx, class_name in enumerate(model.classes_):
+        shap.summary_plot(
+            shap_values[:, :, class_idx], X_test,
+            show=False
+        )
+        plt.title(f"SHAP Summary - {class_name}")
+        plt.tight_layout()
+        plt.savefig(f"report/shap_summary_{class_name}.png", dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"Saved -> report/shap_summary_{class_name}.png")
 
-    # Plot 2: Global bar
-    shap.summary_plot(
-        shap_values, X_test,
-        plot_type="bar",
-        class_names=model.classes_,
-        show=False
-    )
-    plt.title("SHAP Feature Importance (Mean |SHAP Value|)")
-    plt.tight_layout()
-    plt.savefig("report/shap_bar.png", dpi=150, bbox_inches="tight")
-    plt.close()
-    print("Saved -> report/shap_bar.png")
+        shap.summary_plot(
+            shap_values[:, :, class_idx], X_test,
+            plot_type="bar",
+            show=False
+        )
+        plt.title(f"SHAP Feature Importance (Mean |SHAP Value|) - {class_name}")
+        plt.tight_layout()
+        plt.savefig(f"report/shap_bar_{class_name}.png", dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"Saved -> report/shap_bar_{class_name}.png")
 
     # Plot 3: Local waterfall - one sample per class
     for class_idx, class_name in enumerate(model.classes_):
